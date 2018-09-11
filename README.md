@@ -1,1 +1,1 @@
-# CAU_capstone_design_6_team
+# 중앙대학교 캡스톤 디자인 6조
