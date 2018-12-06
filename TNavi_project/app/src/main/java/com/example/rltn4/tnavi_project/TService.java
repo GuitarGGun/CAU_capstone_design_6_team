@@ -1,3 +1,4 @@
+
 package com.example.rltn4.tnavi_project;
 
 import android.annotation.TargetApi;
@@ -18,6 +19,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
+import android.os.Vibrator;
 import android.provider.ContactsContract;
 import android.provider.Settings;
 import android.support.v4.content.ContextCompat;
@@ -91,7 +93,7 @@ public class TService extends Service implements LocationListener{
     @Override
     public void onCreate() {
         super.onCreate();
-        Toast.makeText(getApplicationContext(), "Service Created", Toast.LENGTH_SHORT).show();
+//        Toast.makeText(getApplicationContext(), "Service Created", Toast.LENGTH_SHORT).show();
         activity_flag = true;
         pIndex = 1;
         mIndex = 0;
@@ -425,7 +427,12 @@ public class TService extends Service implements LocationListener{
     void changeArrow(ImageView arrowView, TextView text_msg) {
         String msg = (String) text_msg.getText();
         if (msg.indexOf("1시") >= 0) {
-            arrowView.setImageResource(R.drawable.t1);
+            if (msg.indexOf("11시") >= 0){
+                arrowView.setImageResource(R.drawable.t11);
+            }
+            else {
+                arrowView.setImageResource(R.drawable.t1);
+            }
         } else if (msg.indexOf("3시") >= 0) {
             arrowView.setImageResource(R.drawable.t3);
         } else if (msg.indexOf("5시") >= 0) {
@@ -434,8 +441,6 @@ public class TService extends Service implements LocationListener{
             arrowView.setImageResource(R.drawable.t7);
         } else if (msg.indexOf("9시") >= 0) {
             arrowView.setImageResource(R.drawable.t9);
-        } else if (msg.indexOf("11시") >= 0) {
-            arrowView.setImageResource(R.drawable.t11);
         } else {
             arrowView.setImageResource(R.drawable.uparrow);
         }
@@ -444,6 +449,8 @@ public class TService extends Service implements LocationListener{
                 arrow_img.setImageResource(R.drawable.blank);
             }
         };
+        final Vibrator vibrator = (Vibrator)getSystemService(Context.VIBRATOR_SERVICE);
+        vibrator.vibrate(1000);
         handler.sendEmptyMessageDelayed(0,3000); // 3초 딜레이
     }
 

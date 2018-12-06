@@ -19,7 +19,10 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.location.Location;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Message;
+import android.os.Vibrator;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
@@ -39,16 +42,22 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.firebase.database.ChildEventListener;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
-
+import com.skt.Tmap.TMapData;
+import com.skt.Tmap.TMapMarkerItem;
 import com.skt.Tmap.TMapPoint;
-
+import com.skt.Tmap.TMapPolyLine;
 
 import java.io.IOException;
 import java.util.ArrayList;
 
 import static android.Manifest.permission_group.CAMERA;
+import static java.lang.StrictMath.abs;
+import static java.lang.StrictMath.min;
 
 public class CameraActivity extends AppCompatActivity implements SurfaceHolder.Callback{
 
@@ -63,6 +72,7 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
     private boolean isCreate;
 
     private ImageView arrow_img;
+    private ImageView destination_img;
 
     private SensorManager mySensorManager; // 센서 매니저
     private SensorEventListener magnetic_Listener; // 센서 리스너
@@ -98,16 +108,28 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
 
     private boolean gyroRunning;
     private boolean accRunning;
-    private double mAccPitch;
+    private double mAccPitch, mAccRoll;
     private double temp;
     private float a = 0.2f;
 
     private double dest_degree = 0.0;
 
+    private float mLowPassY = 0;
+    private float mHighPassY = 0;
+    private float mLastY = 0;
+
     private TService tService; // 서비스 변수이다.
     private boolean isService = false; // 서비스 중인지 확인하는 변수이다.
 
+    private FirebaseDatabase database = FirebaseDatabase.getInstance();
+    private DatabaseReference myRef = database.getReference("LocationData");
+    // 읽어온 데이터 저장할 리스트 변수 선언
+    private ArrayList<TMapBox> list = new ArrayList<>();
+
     public static Activity _Camera_Activity;
+
+    private Button dest_following_btn;
+    private boolean dest_following_onoff = false;
 
     private ServiceConnection conn = new ServiceConnection() {
         public void onServiceConnected(ComponentName name,
@@ -133,7 +155,7 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+//        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         setContentView(R.layout.activity_camera);
 
         _Camera_Activity = CameraActivity.this;
@@ -155,6 +177,7 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
         surfaceCreated(surfaceHolder);
 
         arrow_img = (ImageView)findViewById(R.id.arrow);
+        destination_img = (ImageView)findViewById(R.id.destination);
 
         percent_proBar = (ProgressBar)findViewById(R.id.percent);
         percent_proBar.setIndeterminate(false);
@@ -171,8 +194,59 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
             }
         });
 
-        final TextView textView = findViewById(R.id.text);
+        dest_following_btn = (Button)findViewById(R.id.dest_following_btn);
+        dest_following_btn.setText("깃발"+"\n"+"OFF");
 
+        dest_following_btn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if(dest_following_onoff == true) {
+                    dest_following_onoff = false;
+                    dest_following_btn.setText("깃발"+"\n"+"OFF");
+                }
+                else {
+                    dest_following_onoff = true;
+                    dest_following_btn.setText("깃발"+"\n"+"ON");
+                }
+            }
+        });
+        final TextView textView = findViewById(R.id.text);
+        textView.setOnClickListener(new View.OnClickListener(){
+
+            @Override
+            public void onClick(View v) {
+                changeArrow(arrow_img,textView);
+            }
+        });
+
+        // 데이터 읽어오기
+        myRef.addChildEventListener(new ChildEventListener() {
+            @Override
+            public void onChildAdded(@NonNull DataSnapshot dataSnapshot, @Nullable String s) {
+                TMapBox tMapBox = dataSnapshot.getValue(TMapBox.class);
+                list.add(tMapBox);
+            }
+
+            @Override
+            public void onChildChanged(@NonNull DataSnapshot dataSnapshot, @Nullable String s) {
+
+            }
+
+            @Override
+            public void onChildRemoved(@NonNull DataSnapshot dataSnapshot) {
+
+            }
+
+            @Override
+            public void onChildMoved(@NonNull DataSnapshot dataSnapshot, @Nullable String s) {
+
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError databaseError) {
+
+            }
+        });
 
         // 서비스와 연결한다.
         Intent intent = new Intent(CameraActivity.this, TService.class);
@@ -253,6 +327,11 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
                         double gyroY = sensorEvent.values[1];
                         double text = 0.0;
 
+//                        mLowPassY = lowPass((float)gyroY,mLowPassY);
+                        /* 하이패스 필터*/
+//                        mHighPassY = highPass((float)gyroY,mLastY,mHighPassY);
+//                        mLastY = (float)gyroY;
+
                         /* 단위시간 계산 */
                         dt = (sensorEvent.timestamp - timestamp) * NS2S;
                         timestamp = sensorEvent.timestamp;
@@ -271,24 +350,27 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
                             handling_x = handling_x%360; // handling_x = 핸드폰 들고 나침반 각도
                             pitch_text.setText(String.format("%f",handling_x));
 
-                            ArrayList<TMapPoint> pointList = tService.getPointList(); // 체크포인트 가져오기
+                            ArrayList<TMapPoint> pointList = tService.getPointList();
                             if(isCreate) {
+                                dest_degree = destiny_angle(tService.getPointList().get(tService.getPointList().size() - 1).getLatitude(), tService.getPointList().get(pointList.size() - 1).getLongitude());
+                                Log.d("degree3",String.format("%f",dest_degree));
+                                nearest_building_index = nearest_building();
                                 if(nearest_building_index >= 0) {
-                                    building_degree = 80;
+                                    building_degree = destiny_angle(list.get(nearest_building_index).getLat(), list.get(nearest_building_index).getLon());
 
                                 /* 건물정보 출력 */
                                     if (building_degree >= 10 && building_degree < 350 && handling_x >= (building_degree - 10.0) && handling_x <= (building_degree + 10.0)) { // 목적지가 10~350
-                                        building_text.setText("건물있당");
+                                        building_text.setText(list.get(nearest_building_index).getName());
                                         building_text.setX((float) (width - width * (handling_x - (building_degree - 10.0)) / 20.0));
                                     } else if (building_degree < 10.0 && (handling_x < (building_degree + 10.0) || handling_x > (360 - building_degree))) { // 0~10
-                                        building_text.setText("건물있당");
+                                        building_text.setText(list.get(nearest_building_index).getName());
                                         if (handling_x < 350) {
                                             building_text.setX((float) (width - (width * (handling_x - (building_degree - 10.0)) / 20.0)));
                                         } else {
                                             building_text.setX((float) (width - (width * (handling_x - (360 - building_degree)) / 20.0)));
                                         }
                                     } else if (building_degree >= 350.0 && ((handling_x >= (building_degree - 10.0) || handling_x < (10.0 + building_degree) % 360))) { // 350~360
-                                        building_text.setText("건물있당");
+                                        building_text.setText(list.get(nearest_building_index).getName());
                                         if (handling_x >= (building_degree - 10.0)) {
                                             building_text.setX((float) (width - width * (handling_x - (building_degree - 10.0)) / 20.0));
                                         } else {
@@ -297,6 +379,36 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
                                     } else {
                                         building_text.setText("");
                                     }
+                                }
+                                else{
+                                    building_text.setText("");
+                                }
+
+                                if(dest_following_onoff == true) {
+                                /* 목적지 팔로잉 */
+                                    if (dest_degree >= 10 && dest_degree < 350 && handling_x >= (dest_degree - 10.0) && handling_x <= (dest_degree + 10.0)) { // 목적지가 10~350
+                                        destination_img.setImageDrawable(getResources().getDrawable(R.drawable.flag));
+                                        destination_img.setX((float) (width - width * (handling_x - (dest_degree - 10.0)) / 20.0));
+                                    } else if (dest_degree < 10.0 && (handling_x < (dest_degree + 10.0) || handling_x > (360 - dest_degree))) { // 0~10
+                                        destination_img.setImageDrawable(getResources().getDrawable(R.drawable.flag));
+                                        if (handling_x < 350) {
+                                            destination_img.setX((float) (width - (width * (handling_x - (dest_degree - 10.0)) / 20.0)));
+                                        } else {
+                                            destination_img.setX((float) (width - (width * (handling_x - (360 - dest_degree)) / 20.0)));
+                                        }
+                                    } else if (dest_degree >= 350.0 && ((handling_x >= (dest_degree - 10.0) || handling_x < (10.0 + dest_degree) % 360))) { // 350~360
+                                        destination_img.setImageDrawable(getResources().getDrawable(R.drawable.flag));
+                                        if (handling_x >= (dest_degree - 10.0)) {
+                                            destination_img.setX((float) (width - width * (handling_x - (dest_degree - 10.0)) / 20.0));
+                                        } else {
+                                            destination_img.setX((float) (width * (((10.0 + dest_degree) % 360 - handling_x)) / 20.0));
+                                        }
+                                    } else {
+                                        destination_img.setImageDrawable(getResources().getDrawable(R.drawable.blank));
+                                    }
+                                }
+                                else{
+                                    destination_img.setImageDrawable(getResources().getDrawable(R.drawable.blank));
                                 }
                             }
                         }
@@ -311,6 +423,27 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
 
             }
         };
+    }
+
+    public int nearest_building(){
+        int index = 0;
+        double min_dist = 100000;
+        double currnet_dist = 0;
+
+        for(int i=0; i<list.size(); i++) {
+            currnet_dist = distance(list.get(i).getLat(),list.get(i).getLon(),tService.getLatitude(),tService.getLongitude(),"meter");
+            Log.d("degree","min_dist : "+String.format("%s %f",list.get(index).getName(),min_dist));
+            Log.d("degree","current_dist : "+String.format("%s %f",list.get(i).getName(),currnet_dist));
+            if( min_dist > currnet_dist ){
+                index = i;
+                min_dist = currnet_dist;
+            }
+        }
+        if(min_dist > 50){
+            index = -1;
+        }
+
+        return index;
     }
 
     public double destiny_angle(double dest_latitude, double dest_longitude){
@@ -330,10 +463,29 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
         double angle = (Math.asin((vector_Longitude * vector_standard_latitude - vector_Latitude * vector_standard_longitude)
                 /(Math.sqrt(Math.pow(vector_Latitude, 2) + Math.pow(vector_Longitude, 2)) * Math.sqrt(Math.pow(vector_standard_latitude, 2) + Math.pow(vector_standard_longitude, 2)))) * 57.2958);
 
+        if( my_latitude < dest_latitude && my_longitude < dest_longitude ){ // 1사분면
+            angle = 90 - Math.abs(angle);
+        }
+        else if( my_latitude < dest_latitude && my_longitude > dest_longitude){ // 2사분면
+            angle = 270 + Math.abs(angle);
+        }
+        else if( my_latitude > dest_latitude && my_longitude > dest_longitude){ // 3사분면
+            angle = 270 - Math.abs(angle);
+        }
+        else{ // 4사분면
+            angle = 90 + Math.abs(angle);
+        }
         // 특정 각도가 넘는지를 확인한다.
         return Math.abs(angle);
     }
 
+    float lowPass(float current, float last){
+        return (float)(last*(1.0f-0.1)+current*0.1);
+    }
+
+    float highPass(float current, float last, float filtered){
+        return (float)(1*(filtered+current-last));
+    }
     private void complementary(double new_ts){
         /* 자이로랑 가속 해제 */
         gyroRunning = false;
@@ -407,6 +559,36 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
 
     }
 
+    void changeArrow(ImageView arrowView, TextView text_msg) {
+        String msg = (String) text_msg.getText();
+        if (msg.indexOf("1시") >= 0) {
+            if (msg.indexOf("11시") >= 0){
+                arrowView.setImageResource(R.drawable.t11);
+            }
+            else {
+                arrowView.setImageResource(R.drawable.t1);
+            }
+        } else if (msg.indexOf("3시") >= 0) {
+            arrowView.setImageResource(R.drawable.t3);
+        } else if (msg.indexOf("5시") >= 0) {
+            arrowView.setImageResource(R.drawable.t5);
+        } else if (msg.indexOf("7시") >= 0) {
+            arrowView.setImageResource(R.drawable.t7);
+        } else if (msg.indexOf("9시") >= 0) {
+            arrowView.setImageResource(R.drawable.t9);
+        } else {
+            arrowView.setImageResource(R.drawable.uparrow);
+        }
+        Handler handler = new Handler(){
+            public void handleMessage(Message msg){
+                arrow_img.setImageResource(R.drawable.blank);
+            }
+        };
+        handler.sendEmptyMessageDelayed(0,3000); // 3초 딜레이
+
+    }
+
+
     private boolean checkCAMERAPermission(){
         int result = ContextCompat.checkSelfPermission(getApplicationContext(),Manifest.permission.CAMERA);
         return result == PackageManager.PERMISSION_GRANTED;
@@ -442,6 +624,12 @@ public class CameraActivity extends AppCompatActivity implements SurfaceHolder.C
 
     private void showMessagePermission(String message, DialogInterface.OnClickListener okListener){
         new android.support.v7.app.AlertDialog.Builder(this).setMessage(message).setPositiveButton("허용",okListener).setNegativeButton("거부",null).create().show();
+    }
+
+    public static String DecodeString(String string) {
+        string = string.replace("{", "[");
+        string = string.replace("}", "]");
+        return string;
     }
 
     private static double distance(double lat1, double lon1, double lat2, double lon2, String unit) {
