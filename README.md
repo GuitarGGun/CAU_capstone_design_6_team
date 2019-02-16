@@ -1,7 +1,7 @@
 # 중앙대학교 캡스톤 디자인 6조
 
 ![icon_round](https://user-images.githubusercontent.com/34343170/45595073-f3dd9c80-b9e0-11e8-9260-b491981b0a0c.png)
->절대 길 잃어버릴 수 없는 길찾기 어플리케이션!
+>절대 길 잃어버릴 수 없는 길찾기 애플리케이션!
 
 ![image](https://user-images.githubusercontent.com/34343170/49566392-cbc16200-f96d-11e8-8329-d8cfa05a8829.png)
 ![image](https://user-images.githubusercontent.com/34343170/49566406-d7ad2400-f96d-11e8-9baa-3a982222d633.png)
